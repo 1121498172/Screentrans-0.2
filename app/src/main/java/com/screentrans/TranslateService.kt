@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,7 @@ class TranslateService : AccessibilityService() {
             private set
 
         private const val MIN_SCAN_INTERVAL = 260L
+        private const val TAG = "ScreenTrans"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -59,6 +61,7 @@ class TranslateService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         prefs = Prefs.get(this)
+        Scanner.TotalScreen.width = resources.displayMetrics.widthPixels
         Scanner.TotalScreen.height = resources.displayMetrics.heightPixels
         overlay = OverlayController(this, prefs)
         sampler = ScreenSampler(this)
@@ -70,6 +73,7 @@ class TranslateService : AccessibilityService() {
             onProgress = { schedule(120) }
         )
         prefs.raw.registerOnSharedPreferenceChangeListener(prefListener)
+        Log.i(TAG, "service connected, enabled=${prefs.enabled}, mode=${prefs.mode}, whitelist=${prefs.whitelist}")
         schedule(300)
     }
 
@@ -225,5 +229,6 @@ class TranslateService : AccessibilityService() {
 
         val rendered = coordinator.firstPass(items)
         overlay.show(rendered, shot)
+        Log.i(TAG, "scan pkg=$pkg captured=${items.size} rendered=${rendered.size}")
     }
 }

@@ -41,7 +41,6 @@ class OverlayController(
 
     private val views = HashMap<String, TextView>()
     private val rendered = HashMap<String, RenderItem>()
-    private val occupied = ArrayList<Rect>()
     private var lastSignature: String? = null
 
     init {
@@ -68,6 +67,16 @@ class OverlayController(
 
     fun hasContent(): Boolean = views.isNotEmpty()
 
+    /**
+     * 不能只信 attached 标志：HyperOS 会在切前后台/全屏时把无障碍悬浮窗收走，
+     * 而标志位还是 true，之后所有渲染都塞进一个脱离屏幕的容器里 —— 症状就是
+     * 「诊断说画出了，屏幕上却没有」。每次都实测一下。
+     */
+    private fun isReallyAttached(): Boolean {
+        val container = root ?: return false
+        return attached && container.isAttachedToWindow
+    }
+
     fun show(items: List<RenderItem>, shot: Bitmap?) {
         if (items.isEmpty()) {
             clear()
@@ -76,6 +85,8 @@ class OverlayController(
         val signature = items.joinToString("|") {
             it.raw.viewKey + ">" + it.translated + ":" + it.provisional
         } + "#" + System.identityHashCode(shot)
+
+        if (!isReallyAttached()) attached = false
         if (attached && signature == lastSignature) return
         lastSignature = signature
 
@@ -83,7 +94,6 @@ class OverlayController(
         container.removeAllViews()
         views.clear()
         rendered.clear()
-        occupied.clear()
         updateBounds()
 
         val night = isNight()
@@ -99,10 +109,15 @@ class OverlayController(
         if (!attached) {
             val lp = params ?: return
             try {
+                if (container.parent != null) {
+                    wm.removeView(container)
+                }
                 wm.addView(container, lp)
                 attached = true
+                android.util.Log.i("ScreenTrans", "overlay attached, views=${views.size}")
             } catch (t: Throwable) {
                 attached = false
+                android.util.Log.e("ScreenTrans", "overlay attach failed: ${t.message}")
             }
         }
     }
@@ -128,7 +143,6 @@ class OverlayController(
         root?.removeAllViews()
         views.clear()
         rendered.clear()
-        occupied.clear()
         lastSignature = null
     }
 
@@ -178,12 +192,6 @@ class OverlayController(
         val r = item.raw.rect
         if (r.bottom <= 0 || r.top >= screenH || r.right <= 0 || r.left >= screenW) return
         if (r.width() < 2 * density || r.height() < 2 * density) return
-
-        // 同一块区域只画一次：父子节点文本不同但矩形重叠时，后画的会盖住先画的
-        for (used in occupied) {
-            if (used.contains(r)) return
-        }
-        occupied.add(Rect(r))
 
         val fallback = AppProfile.styleFor(item.raw.pkg, prefs.theme, night)
         val sampled = sampleBackground(shot, r)

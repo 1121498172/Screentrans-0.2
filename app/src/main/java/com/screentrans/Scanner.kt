@@ -32,9 +32,32 @@ object Scanner {
         walk(root, null, selfPackage, pkg, density, out, seen, 0)
         if (out.isEmpty()) return emptyList()
 
-        // 大块优先保留：只有「大块矩形包住小块」且「大块文本确实包含小块文本」才算重复。
-        // 之前只看矩形包含，遇到覆盖半屏的容器节点会把下面一片消息全判成重复丢掉。
-        val byArea = out.sortedByDescending { it.rect.width().toLong() * it.rect.height() }
+        // Discord 的每条消息外面套了一层容器：容器文本只是「昵称 + 时间」，
+        // 矩形却覆盖整条消息。如果它内部有文本更长、又不被它包含的子节点，
+        // 说明正文在子节点里 —— 这个容器标签必须丢掉，否则会糊出一个
+        // 巨大色块盖住正文，而块里只有昵称。
+        val dropped = HashSet<Int>()
+        for (i in out.indices) {
+            val outer = out[i]
+            val outerArea = outer.rect.width().toLong() * outer.rect.height()
+            for (j in out.indices) {
+                if (i == j) continue
+                val inner = out[j]
+                val innerArea = inner.rect.width().toLong() * inner.rect.height()
+                if (innerArea >= outerArea) continue
+                if (!outer.rect.contains(inner.rect)) continue
+                if (inner.text.length > outer.text.length &&
+                    !outer.text.contains(inner.text, ignoreCase = true)
+                ) {
+                    dropped.add(i)
+                    break
+                }
+            }
+        }
+        val candidates = if (dropped.isEmpty()) out else out.filterIndexed { index, _ -> index !in dropped }
+
+        // 大块优先保留：只有「大块矩形包住小块」且「大块文本确实包含小块文本」才算重复
+        val byArea = candidates.sortedByDescending { it.rect.width().toLong() * it.rect.height() }
         val kept = ArrayList<RawItem>(byArea.size)
         for (item in byArea) {
             var covered = false
@@ -111,20 +134,27 @@ object Scanner {
     ): Boolean {
         if (text.length < 2 || text.length > 3000) return false
         if (!letterRegex.containsMatchIn(text)) return false
-        // 中英混排且以中文为主（例如「@nom 点击查看附件」）说明本来就是中文界面，跳过
+        // 中英混排且以中文为主（例如「未读消息，SillyTavern」「rules（文字频道）」）说明
+        // 本来就是中文界面，跳过。留一点余量，避免把「Discord 服务器」这种也误杀。
         val cjk = text.count { it.code in 0x4E00..0x9FFF }
         val latin = text.count { it in 'a'..'z' || it in 'A'..'Z' }
-        if (cjk > 0 && cjk >= latin) return false
+        if (cjk > 0 && cjk * 2 >= latin) return false
         if (node.isPassword || node.isEditable) return false
         val cls = node.className?.toString().orEmpty()
         if (cls.contains("EditText") || cls.contains("AutoComplete")) return false
         if (rect.width() < 24 * density || rect.height() < 10 * density) return false
-        if (rect.bottom <= 0 || rect.top >= TotalScreen.height) return false
+        // 侧边栏抽屉关着的时候，里面的节点坐标还在，但大部分在屏幕外。
+        // 只保留至少一半面积落在屏幕内的节点，避免抓一堆看不见的东西。
+        val visibleW = minOf(rect.right, TotalScreen.width) - maxOf(rect.left, 0)
+        val visibleH = minOf(rect.bottom, TotalScreen.height) - maxOf(rect.top, 0)
+        if (visibleW <= 0 || visibleH <= 0) return false
+        if (visibleW * 2 < rect.width() || visibleH * 2 < rect.height()) return false
         return true
     }
 
     /** 只在判断节点是否还在屏幕内时用到，由 Service 在启动时填充。 */
     object TotalScreen {
+        var width: Int = 1080
         var height: Int = 2400
     }
 }
