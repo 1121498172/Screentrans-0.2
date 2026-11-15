@@ -65,7 +65,7 @@ class Coordinator(
             Diagnostics.add(item.text, zh, if (provisional) "临时" else "完成")
         }
         refiner.enqueue(items)
-        Diagnostics.setRendered(out.size)
+        Diagnostics.markRendered(out.size)
 
         ScanStats.captured = items.size
         ScanStats.translated = out.size

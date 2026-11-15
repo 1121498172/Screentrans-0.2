@@ -33,7 +33,7 @@ object Diagnostics {
     }
 
     @Synchronized
-    fun setRendered(count: Int) {
+    fun markRendered(count: Int) {
         rendered = count
     }
 
