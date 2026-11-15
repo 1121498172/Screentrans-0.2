@@ -32,13 +32,17 @@ object Scanner {
         walk(root, null, selfPackage, pkg, density, out, seen, 0)
         if (out.isEmpty()) return emptyList()
 
-        // 大块优先保留：被大块完全包住、且文本更短的节点是重复项
+        // 大块优先保留：只有「大块矩形包住小块」且「大块文本确实包含小块文本」才算重复。
+        // 之前只看矩形包含，遇到覆盖半屏的容器节点会把下面一片消息全判成重复丢掉。
         val byArea = out.sortedByDescending { it.rect.width().toLong() * it.rect.height() }
         val kept = ArrayList<RawItem>(byArea.size)
         for (item in byArea) {
             var covered = false
             for (k in kept) {
-                if (k.rect.contains(item.rect) && k.text.length >= item.text.length) {
+                if (k.rect.contains(item.rect) &&
+                    k.text.length > item.text.length &&
+                    k.text.contains(item.text, ignoreCase = true)
+                ) {
                     covered = true
                     break
                 }

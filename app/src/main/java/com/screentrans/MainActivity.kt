@@ -11,6 +11,7 @@ import android.view.accessibility.AccessibilityManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -391,6 +392,24 @@ class MainActivity : AppCompatActivity() {
             refreshCache()
             Toast.makeText(this, "缓存已清空", Toast.LENGTH_SHORT).show()
         }
+        findViewById<MaterialButton>(R.id.btnDiag).setOnClickListener {
+            showDiagnostics()
+        }
+    }
+
+    private fun showDiagnostics() {
+        val content = TextView(this).apply {
+            text = Diagnostics.dump()
+            textSize = 12f
+            setTextIsSelectable(true)
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+        }
+        val scroll = ScrollView(this).apply { addView(content) }
+        AlertDialog.Builder(this)
+            .setTitle("抓取诊断")
+            .setView(scroll)
+            .setPositiveButton("关闭", null)
+            .show()
     }
 
     private fun refreshCache() {

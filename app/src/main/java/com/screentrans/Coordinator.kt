@@ -32,6 +32,7 @@ class Coordinator(
     private val scaledDensity = metrics.scaledDensity
 
     suspend fun firstPass(items: List<RawItem>): List<RenderItem> {
+        Diagnostics.begin(items.size)
         val out = ArrayList<RenderItem>(items.size)
         for (item in items) {
             val cached = cache.get(item.text)
@@ -49,14 +50,22 @@ class Coordinator(
                 }
             }
 
-            if (zh.isNullOrBlank()) continue
+            if (zh.isNullOrBlank()) {
+                Diagnostics.add(item.text, null, "没翻出来")
+                continue
+            }
             // 用户名、昵称、Discord 这类不需要翻的，翻完还是原样，就别贴块了
-            if (sameText(item.text, zh)) continue
+            if (sameText(item.text, zh)) {
+                Diagnostics.add(item.text, null, "同原文跳过")
+                continue
+            }
 
             val provisional = !fromLlm && prefs.llmEnabled
             out.add(build(item, zh, provisional))
+            Diagnostics.add(item.text, zh, if (provisional) "临时" else "完成")
         }
         refiner.enqueue(items)
+        Diagnostics.setRendered(out.size)
 
         ScanStats.captured = items.size
         ScanStats.translated = out.size

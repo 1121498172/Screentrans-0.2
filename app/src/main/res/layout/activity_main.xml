@@ -335,6 +335,18 @@
             android:layout_marginTop="4dp"
             android:text="清空翻译缓存" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDiag"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="查看抓取诊断" />
+
+        <TextView
+            android:id="@+id/tvDiagHint"
+            style="@style/HintText"
+            android:text="怀疑漏翻时：打开 Discord 停 3 秒 → 回这里点「查看抓取诊断」，会列出每条消息是没抓到、没翻出来，还是画出来了。" />
+
         <TextView
             style="@style/HintText"
             android:layout_marginTop="26dp"
