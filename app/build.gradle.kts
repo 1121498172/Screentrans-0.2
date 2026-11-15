@@ -11,8 +11,8 @@ android {
         applicationId = "com.screentrans"
         minSdk = 29
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.2.5"
+        versionCode = 9
+        versionName = "0.2.7"
     }
 
     buildTypes {

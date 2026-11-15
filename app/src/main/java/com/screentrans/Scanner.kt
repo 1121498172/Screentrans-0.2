@@ -142,6 +142,10 @@ object Scanner {
         if (node.isPassword || node.isEditable) return false
         val cls = node.className?.toString().orEmpty()
         if (cls.contains("EditText") || cls.contains("AutoComplete")) return false
+        // 关键：Discord 切页后会把上一页（频道列表）的 View 留在树里，
+        // 坐标还在屏幕内、但 isVisibleToUser=false。不过滤的话，这些隐藏节点
+        // 的译文会被反复画到聊天页上，形成叠字和残留块。
+        if (!node.isVisibleToUser) return false
         if (rect.width() < 24 * density || rect.height() < 10 * density) return false
         // 侧边栏抽屉关着的时候，里面的节点坐标还在，但大部分在屏幕外。
         // 只保留至少一半面积落在屏幕内的节点，避免抓一堆看不见的东西。

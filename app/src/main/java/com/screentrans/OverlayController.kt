@@ -78,11 +78,19 @@ class OverlayController(
     }
 
     fun show(items: List<RenderItem>, shot: Bitmap?) {
-        if (items.isEmpty()) {
-            clear()
-            return
+        // 空列表不再清屏：切页动画中间会出现瞬时空列表，清掉就会「闪一下」。
+        // 真正的清屏由 Service 在连续多次为空后决定。
+        if (items.isEmpty()) return
+        updateBounds()
+
+        val drawable = items.filter { item ->
+            val r = item.raw.rect
+            r.bottom > 0 && r.top < screenH && r.right > 0 && r.left < screenW &&
+                r.width() >= 2 * density && r.height() >= 2 * density
         }
-        val signature = items.joinToString("|") {
+        if (drawable.isEmpty()) return
+
+        val signature = drawable.joinToString("|") {
             it.raw.viewKey + ">" + it.translated + ":" + it.provisional
         } + "#" + System.identityHashCode(shot)
 
@@ -91,20 +99,16 @@ class OverlayController(
         lastSignature = signature
 
         val container = ensureRoot()
+        // removeAllViews 与 addView 在同一帧内完成，不会闪；只要不 detach 窗口
         container.removeAllViews()
         views.clear()
         rendered.clear()
-        updateBounds()
 
         val night = isNight()
-        for (item in items) {
+        for (item in drawable) {
             addItem(container, item, night, shot)
         }
-        if (views.isEmpty()) {
-            container.removeAllViews()
-            detach()
-            return
-        }
+        if (views.isEmpty()) return
 
         if (!attached) {
             val lp = params ?: return

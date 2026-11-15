@@ -48,6 +48,7 @@ class TranslateService : AccessibilityService() {
     private var lastPkg: String? = null
     private var watchdogJob: Job? = null
     private var listenerRegistered = false
+    private var emptyScans = 0
 
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (::prefs.isInitialized) {
@@ -132,14 +133,15 @@ class TranslateService : AccessibilityService() {
         lastPkg = pkg
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // 换窗口/换页面，旧截图作废
+                // 换窗口/换页面：只作废旧截图，不拆覆盖层。
+                // 先清屏再截图会让屏幕空白 100~300ms，就是「闪一下」的来源。
                 resetShot()
                 schedule(180)
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> schedule(300)
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 lastScrollAt = SystemClock.uptimeMillis()
-                overlay.clear()
+                // 滚动时保留旧译文，等新结果一次性替换；清屏会闪
                 schedule(220)
             }
         }
@@ -165,7 +167,7 @@ class TranslateService : AccessibilityService() {
     }
 
     private fun resetShot() {
-        overlay.clear()
+        // 只回收截图，不动覆盖层
         recycleShot()
     }
 
@@ -251,13 +253,16 @@ class TranslateService : AccessibilityService() {
             density = resources.displayMetrics.density
         )
         if (items.isEmpty()) {
-            overlay.clear()
+            // 切页动画中间会出现瞬时空列表；连续两次为空才真正清屏，
+            // 否则每切一次就闪一下。
+            emptyScans++
+            if (emptyScans >= 2) overlay.clear()
             return
         }
+        emptyScans = 0
 
         // 截图要在覆盖层画上去之前拍，否则会把自己的色块采样进去
         if (shot == null || shotPkg != pkg) {
-            overlay.clear()
             shot?.recycle()
             shot = sampler.capture()
             shotPkg = pkg
