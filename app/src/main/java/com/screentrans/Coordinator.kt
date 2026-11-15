@@ -54,8 +54,10 @@ class Coordinator(
                 Diagnostics.add(item.text, null, "没翻出来")
                 continue
             }
-            // 用户名、昵称、Discord 这类不需要翻的，翻完还是原样，就别贴块了
+            // 用户名、昵称、Discord 这类不需要翻的，翻完还是原样，就别贴块了。
+            // 同时记进缓存并标成 LLM 结果，避免巡检每秒重复请求同一句。
             if (sameText(item.text, zh)) {
+                cache.put(item.text, zh, true)
                 Diagnostics.add(item.text, null, "同原文跳过")
                 continue
             }

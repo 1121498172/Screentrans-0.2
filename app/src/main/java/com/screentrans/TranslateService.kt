@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class TranslateService : AccessibilityService() {
@@ -45,6 +46,8 @@ class TranslateService : AccessibilityService() {
     private var scanning = false
     private var rescanQueued = false
     private var lastPkg: String? = null
+    private var watchdogJob: Job? = null
+    private var listenerRegistered = false
 
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (::prefs.isInitialized) {
@@ -63,18 +66,49 @@ class TranslateService : AccessibilityService() {
         prefs = Prefs.get(this)
         Scanner.TotalScreen.width = resources.displayMetrics.widthPixels
         Scanner.TotalScreen.height = resources.displayMetrics.heightPixels
-        overlay = OverlayController(this, prefs)
-        sampler = ScreenSampler(this)
-        coordinator = Coordinator(
-            context = this,
-            prefs = prefs,
-            scope = scope,
-            onRefined = { item, zh -> mainHandler.post { overlay.update(item.viewKey, zh) } },
-            onProgress = { schedule(120) }
-        )
-        prefs.raw.registerOnSharedPreferenceChangeListener(prefListener)
+
+        if (::overlay.isInitialized) {
+            // 系统会重复回调 onServiceConnected。每次新建 OverlayController 都会多挂一个窗口，
+            // 旧窗口里的译文没人清理，就会永久留在屏幕上。复用前先清空。
+            overlay.clear()
+        } else {
+            overlay = OverlayController(this, prefs)
+            sampler = ScreenSampler(this)
+        }
+        if (!::coordinator.isInitialized) {
+            coordinator = Coordinator(
+                context = this,
+                prefs = prefs,
+                scope = scope,
+                onRefined = { item, zh -> mainHandler.post { overlay.update(item.viewKey, zh) } },
+                onProgress = { schedule(120) }
+            )
+        }
+        if (!listenerRegistered) {
+            prefs.raw.registerOnSharedPreferenceChangeListener(prefListener)
+            listenerRegistered = true
+        }
         Log.i(TAG, "service connected, enabled=${prefs.enabled}, mode=${prefs.mode}, whitelist=${prefs.whitelist}")
+        startWatchdog()
         schedule(300)
+    }
+
+    /**
+     * 兜底巡检：Discord 切频道时无障碍树会变，但不一定再发事件。
+     * 不巡检的话，切页面前画上的频道名译文会一直挂在聊天页上。
+     * 内容没变时 show() 的签名一致，不会重绘，所以 1.5 秒一次的代价很小。
+     */
+    private fun startWatchdog() {
+        if (watchdogJob?.isActive == true) return
+        watchdogJob = scope.launch {
+            while (isActive) {
+                delay(1500)
+                if (!prefs.enabled) continue
+                val root = rootInActiveWindow ?: continue
+                val pkg = root.packageName?.toString() ?: continue
+                if (pkg in prefs.whitelist) schedule(0)
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -120,6 +154,8 @@ class TranslateService : AccessibilityService() {
             prefs.raw.unregisterOnSharedPreferenceChangeListener(prefListener)
         }
         scanJob?.cancel()
+        watchdogJob?.cancel()
+        listenerRegistered = false
         if (::coordinator.isInitialized) coordinator.close()
         if (::overlay.isInitialized) overlay.clear()
         recycleShot()
