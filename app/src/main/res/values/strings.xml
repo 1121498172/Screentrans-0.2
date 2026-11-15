@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">屏幕翻译</string>
+    <string name="a11y_description">读取屏幕上的英文文本，并在原位置覆盖中文译文。仅对你在应用内勾选的 App 生效；不会读取密码框和输入框。</string>
+</resources>
