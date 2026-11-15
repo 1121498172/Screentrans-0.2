@@ -74,7 +74,7 @@ class OverlayController(
             return
         }
         val signature = items.joinToString("|") {
-            it.raw.viewKey + ">" + it.translated
+            it.raw.viewKey + ">" + it.translated + ":" + it.provisional
         } + "#" + System.identityHashCode(shot)
         if (attached && signature == lastSignature) return
         lastSignature = signature
@@ -119,6 +119,7 @@ class OverlayController(
             maxSpScale = prefs.fontScale
         )
         tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, size)
+        tv.setTextColor(ColorUtils.setAlphaComponent(tv.currentTextColor, 255))
         tv.text = translation
     }
 
@@ -195,7 +196,10 @@ class OverlayController(
         val tv = TextView(service).apply {
             text = item.translated
             setTextSize(TypedValue.COMPLEX_UNIT_PX, textSize)
-            setTextColor(textColor)
+            // 机翻占位画淡一点，LLM 回来后 update() 会调回不透明
+            setTextColor(
+                if (item.provisional) ColorUtils.setAlphaComponent(textColor, 165) else textColor
+            )
             gravity = when {
                 item.centered -> Gravity.CENTER
                 tall -> Gravity.START or Gravity.TOP
@@ -221,26 +225,73 @@ class OverlayController(
     }
 
     /**
-     * 在控件矩形内部网格采样，取出现次数最多的颜色当背景。
-     * 文字像素是少数，背景是多数，所以这个众数很稳。
+     * 取背景色，优先级：
+     *  1. 矩形**外侧**一圈 —— 文本块外面通常就是页面底色；
+     *  2. 矩形内部网格 —— 万一外侧取不到（贴边、被裁）。
+     *
+     * 只取内部会有个致命问题：消息行里常有头像、徽章、图片缩略图，
+     * 白色像素一旦成为众数，整块就变成白纸条。
      */
     private fun sampleBackground(shot: Bitmap?, rect: Rect): Int? {
         if (shot == null || shot.width == 0 || shot.height == 0) return null
         val sx = shot.width.toFloat() / screenW
         val sy = shot.height.toFloat() / screenH
-        val left = (rect.left * sx).toInt().coerceIn(0, shot.width - 1)
-        val right = (rect.right * sx).toInt().coerceIn(left + 1, shot.width)
-        val top = (rect.top * sy).toInt().coerceIn(0, shot.height - 1)
-        val bottom = (rect.bottom * sy).toInt().coerceIn(top + 1, shot.height)
+        val inner = Rect(
+            (rect.left * sx).toInt().coerceIn(0, shot.width - 1),
+            (rect.top * sy).toInt().coerceIn(0, shot.height - 1),
+            (rect.right * sx).toInt().coerceIn(1, shot.width),
+            (rect.bottom * sy).toInt().coerceIn(1, shot.height)
+        )
+        if (inner.right <= inner.left || inner.bottom <= inner.top) return null
 
-        val stepX = ((right - left) / 12).coerceAtLeast(1)
-        val stepY = ((bottom - top) / 8).coerceAtLeast(1)
+        val gap = ((4 * density) * ((sx + sy) / 2f)).toInt().coerceAtLeast(2)
+        ringColor(shot, inner, gap)?.let { return it }
+        return areaColor(shot, inner)
+    }
+
+    /** 沿矩形外扩一圈采样 */
+    private fun ringColor(shot: Bitmap, r: Rect, distance: Int): Int? {
         val counts = HashMap<Int, Int>(64)
+        var samples = 0
+        fun put(x: Int, y: Int) {
+            if (x < 0 || y < 0 || x >= shot.width || y >= shot.height) return
+            val c = shot.getPixel(x, y) and 0x00FFFFFF
+            counts[c] = (counts[c] ?: 0) + 1
+            samples++
+        }
 
+        val left = r.left - distance
+        val right = r.right + distance
+        val top = r.top - distance
+        val bottom = r.bottom + distance
+        val stepX = ((right - left) / 18).coerceAtLeast(1)
+        val stepY = ((bottom - top) / 12).coerceAtLeast(1)
+
+        var x = left
+        while (x <= right) {
+            put(x, top)
+            put(x, bottom)
+            x += stepX
+        }
         var y = top
-        while (y < bottom) {
-            var x = left
-            while (x < right) {
+        while (y <= bottom) {
+            put(left, y)
+            put(right, y)
+            y += stepY
+        }
+        if (samples < 12) return null
+        return modeColor(counts)
+    }
+
+    /** 矩形内部网格采样（保底） */
+    private fun areaColor(shot: Bitmap, r: Rect): Int? {
+        val counts = HashMap<Int, Int>(64)
+        val stepX = ((r.right - r.left) / 12).coerceAtLeast(1)
+        val stepY = ((r.bottom - r.top) / 8).coerceAtLeast(1)
+        var y = r.top
+        while (y < r.bottom) {
+            var x = r.left
+            while (x < r.right) {
                 val c = shot.getPixel(x, y) and 0x00FFFFFF
                 counts[c] = (counts[c] ?: 0) + 1
                 x += stepX
@@ -248,7 +299,10 @@ class OverlayController(
             y += stepY
         }
         if (counts.isEmpty()) return null
+        return modeColor(counts)
+    }
 
+    private fun modeColor(counts: Map<Int, Int>): Int {
         var best = 0
         var bestCount = -1
         for ((color, count) in counts) {
@@ -260,12 +314,32 @@ class OverlayController(
         return best or 0xFF000000.toInt()
     }
 
+    /**
+     * 按 WCAG 对比度在纯黑/纯白里挑更清楚的一个，
+     * 不用亮度阈值一刀切 —— 浅灰底上原来的实现会给出同样浅的字。
+     */
     private fun readableText(bg: Int): Int {
-        val r = (bg shr 16) and 0xFF
-        val g = (bg shr 8) and 0xFF
-        val b = bg and 0xFF
-        val luminance = 0.299 * r + 0.587 * g + 0.114 * b
-        return if (luminance > 150) 0xFF101114.toInt() else 0xFFEDEFF2.toInt()
+        val light = 0xFFF2F3F5.toInt()
+        val dark = 0xFF101114.toInt()
+        return if (contrastRatio(bg, dark) >= contrastRatio(bg, light)) dark else light
+    }
+
+    private fun contrastRatio(a: Int, b: Int): Double {
+        val la = relativeLuminance(a)
+        val lb = relativeLuminance(b)
+        val hi = maxOf(la, lb)
+        val lo = minOf(la, lb)
+        return (hi + 0.05) / (lo + 0.05)
+    }
+
+    private fun relativeLuminance(color: Int): Double {
+        fun channel(value: Int): Double {
+            val s = value / 255.0
+            return if (s <= 0.03928) s / 12.92 else Math.pow((s + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel((color shr 16) and 0xFF) +
+            0.7152 * channel((color shr 8) and 0xFF) +
+            0.0722 * channel(color and 0xFF)
     }
 
     private fun isNight(): Boolean {

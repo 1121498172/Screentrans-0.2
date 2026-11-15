@@ -94,7 +94,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshLlmStatus() {
         if (!::tvLastError.isInitialized) return
-        tvLastError.text = when {
+        val head = when {
             prefs.mode == Prefs.MODE_OFFLINE ->
                 "当前是「仅离线」模式，翻出来的一定是 ML Kit 直译（要质量请换混合模式）"
             !prefs.llmEnabled ->
@@ -103,6 +103,14 @@ class MainActivity : AppCompatActivity() {
                 "上次 LLM 错误：${prefs.lastLlmError.take(160)}"
             else -> "LLM 状态：正常"
         }
+        val stats = if (ScanStats.at > 0L) {
+            val ago = (System.currentTimeMillis() - ScanStats.at) / 1000
+            "\n上次扫描：抓到 ${ScanStats.captured} 条，出译文 ${ScanStats.translated} 条" +
+                "（临时 ${ScanStats.provisional} 条，${ago}s 前）"
+        } else {
+            ""
+        }
+        tvLastError.text = head + stats
     }
 
     // ---------- 权限 ----------

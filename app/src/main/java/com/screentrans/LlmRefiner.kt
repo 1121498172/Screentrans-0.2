@@ -33,7 +33,7 @@ class LlmRefiner(
         if (!prefs.llmEnabled) return
         synchronized(lock) {
             for (item in items) {
-                if (queue.size >= 80) break
+                if (queue.size >= 160) break
                 if (item.text in queuedTexts) continue
                 val cached = cache.get(item.text)
                 if (cached != null && cached.fromLlm) continue
@@ -48,8 +48,8 @@ class LlmRefiner(
     private suspend fun loop() {
         while (currentCoroutineContext().isActive) {
             val batch = synchronized(lock) {
-                val list = ArrayList<RawItem>(24)
-                while (queue.isNotEmpty() && list.size < 24) {
+                val list = ArrayList<RawItem>(16)
+                while (queue.isNotEmpty() && list.size < 16) {
                     val item = queue.removeFirst()
                     queuedTexts.remove(item.text)
                     if (list.none { it.text == item.text }) list.add(item)
@@ -66,7 +66,16 @@ class LlmRefiner(
                 batch.joinToString("\n") { it.text },
                 Glossary.extra(prefs.extraGlossary)
             )
-            val result = llm.translateBatch(batch.map { it.text }, glossary)
+            val texts = batch.map { it.text }
+            var result = llm.translateBatch(texts, glossary)
+            if (result == null && texts.size > 4) {
+                // 整批失败通常是某一条把 JSON 撑坏或超长。拆两半重试，
+                // 别让 16 条消息陪着一条坏数据一起报废 60 秒。
+                val mid = texts.size / 2
+                val first = llm.translateBatch(texts.subList(0, mid), glossary)
+                val second = llm.translateBatch(texts.subList(mid, texts.size), glossary)
+                if (first != null && second != null) result = first + second
+            }
 
             var produced = 0
             if (result == null) {

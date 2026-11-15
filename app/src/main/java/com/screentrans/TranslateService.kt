@@ -21,6 +21,8 @@ class TranslateService : AccessibilityService() {
         @Volatile
         var instance: TranslateService? = null
             private set
+
+        private const val MIN_SCAN_INTERVAL = 260L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -35,8 +37,11 @@ class TranslateService : AccessibilityService() {
     private var shotPkg: String? = null
 
     private var scanJob: Job? = null
-    private var lastScanAt = 0L
     private var pendingAt = 0L
+    private var lastScanAt = 0L
+    private var lastScrollAt = 0L
+    private var scanning = false
+    private var rescanQueued = false
     private var lastPkg: String? = null
 
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -62,7 +67,7 @@ class TranslateService : AccessibilityService() {
             prefs = prefs,
             scope = scope,
             onRefined = { item, zh -> mainHandler.post { overlay.update(item.viewKey, zh) } },
-            onProgress = { schedule(200) }
+            onProgress = { schedule(120) }
         )
         prefs.raw.registerOnSharedPreferenceChangeListener(prefListener)
         schedule(300)
@@ -89,15 +94,15 @@ class TranslateService : AccessibilityService() {
         lastPkg = pkg
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // 换窗口/换页面，旧截图作废，否则会把上一屏的颜色套到新页面上
+                // 换窗口/换页面，旧截图作废
                 resetShot()
                 schedule(180)
             }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> schedule(420)
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> schedule(300)
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                // 滚动时先撤掉旧译文，避免文字「贴」在错误位置
+                lastScrollAt = SystemClock.uptimeMillis()
                 overlay.clear()
-                schedule(260)
+                schedule(220)
             }
         }
     }
@@ -138,28 +143,51 @@ class TranslateService : AccessibilityService() {
         mainHandler.post {
             scanJob?.cancel()
             pendingAt = 0L
+            rescanQueued = false
             if (::overlay.isInitialized) overlay.clear()
         }
     }
 
+    /**
+     * 调度原则：
+     *  1. 绝不丢事件——被节流时不是 return，而是把扫描推迟到间隔之后；
+     *  2. 正在扫描时不再取消它（取消会把翻了一半的结果全丢掉），只记一个「待补扫」；
+     *  3. 滚动结束后补扫一次，防止滚动途中扫到的是半屏。
+     */
     private fun schedule(delayMs: Long) {
         mainHandler.post {
-            if (prefs.enabled) {
-                val target = SystemClock.uptimeMillis() + delayMs
-                // 已经有更早的扫描排队时不要往后推：Discord 的内容变化事件很密，
-                // 纯防抖会导致扫描永远被推迟、译文一直不出现。
-                if (pendingAt == 0L || pendingAt > target) {
-                    pendingAt = target
-                    scanJob?.cancel()
-                    scanJob = scope.launch {
-                        delay(delayMs)
-                        pendingAt = 0L
-                        val now = SystemClock.uptimeMillis()
-                        if (now - lastScanAt >= 200L) {
-                            lastScanAt = now
-                            scanNow()
-                        }
-                    }
+            if (!prefs.enabled) return@post
+            if (scanning) {
+                rescanQueued = true
+                return@post
+            }
+            val target = SystemClock.uptimeMillis() + delayMs
+            if (pendingAt != 0L && pendingAt <= target) return@post
+            pendingAt = target
+            scanJob?.cancel()
+            scanJob = scope.launch {
+                delay(delayMs)
+                pendingAt = 0L
+                val gap = SystemClock.uptimeMillis() - lastScanAt
+                if (gap < MIN_SCAN_INTERVAL) delay(MIN_SCAN_INTERVAL - gap)
+
+                lastScanAt = SystemClock.uptimeMillis()
+                scanning = true
+                try {
+                    scanNow()
+                } catch (t: Throwable) {
+                    // 单次扫描失败不能把服务拖死
+                } finally {
+                    scanning = false
+                }
+
+                val now = SystemClock.uptimeMillis()
+                if (now - lastScrollAt < 900L) {
+                    // 刚滚动过，停手后再补一次
+                    schedule(420)
+                } else if (rescanQueued) {
+                    rescanQueued = false
+                    schedule(150)
                 }
             }
         }

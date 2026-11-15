@@ -63,7 +63,7 @@ class LlmTranslator(private val prefs: Prefs) {
         val body = JSONObject().apply {
             put("model", prefs.model.trim().ifBlank { Prefs.DEFAULT_MODEL })
             put("temperature", 0.2)
-            put("max_tokens", 2048)
+            put("max_tokens", 3072)
             put("stream", false)
             put(
                 "messages",
@@ -76,8 +76,8 @@ class LlmTranslator(private val prefs: Prefs) {
 
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 40_000
+            connectTimeout = 10_000
+            readTimeout = 20_000
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Authorization", "Bearer $key")

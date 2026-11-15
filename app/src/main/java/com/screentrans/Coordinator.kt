@@ -4,9 +4,14 @@ import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 
 /**
- * 一次「扫描 → 翻译 → 上屏」的编排：
- * 先用缓存 / 离线结果立刻出中文，同时把没翻过的句子丢进 LLM 队列，
- * 精修结果回来后由覆盖层原地替换。
+ * 一次「扫描 → 翻译 → 上屏」的编排。
+ *
+ * 策略（0.2.1 起）：
+ *  - 有缓存用缓存；
+ *  - 没缓存先上端侧机翻当占位（淡色显示），保证屏幕上不留空洞；
+ *  - 同时把句子丢进 LLM 队列，精修回来后原地替换成实色。
+ *
+ * 0.2 曾经为了质量取消过占位，结果 LLM 一抖动就整条空白 —— 那是漏抓感的来源。
  */
 class Coordinator(
     context: Context,
@@ -30,36 +35,37 @@ class Coordinator(
         val out = ArrayList<RenderItem>(items.size)
         for (item in items) {
             val cached = cache.get(item.text)
-            val zh: String? = when {
-                cached != null -> cached.text
-                prefs.offlineEnabled && allowOffline(item.text) -> offline.translate(item.text)?.also {
-                    cache.put(item.text, it, false)
+            var zh: String? = null
+            var fromLlm = false
+
+            if (cached != null) {
+                zh = cached.text
+                fromLlm = cached.fromLlm
+            } else if (prefs.offlineEnabled) {
+                val offlineText = offline.translate(item.text)
+                if (offlineText != null) {
+                    cache.put(item.text, offlineText, false)
+                    zh = offlineText
                 }
-                else -> null
             }
+
             if (zh.isNullOrBlank()) continue
             // 用户名、昵称、Discord 这类不需要翻的，翻完还是原样，就别贴块了
             if (sameText(item.text, zh)) continue
-            out.add(build(item, zh))
+
+            val provisional = !fromLlm && prefs.llmEnabled
+            out.add(build(item, zh, provisional))
         }
         refiner.enqueue(items)
+
+        ScanStats.captured = items.size
+        ScanStats.translated = out.size
+        ScanStats.provisional = out.count { it.provisional }
+        ScanStats.at = System.currentTimeMillis()
         return out
     }
 
-    /**
-     * 混合模式下，端侧直译只用来应付短 UI 标签。
-     * 聊天正文（长句、带空格）宁愿空着等 LLM，也不先把「微生物」这种东西糊上去。
-     */
-    private fun allowOffline(text: String): Boolean {
-        if (prefs.mode == Prefs.MODE_OFFLINE) return true
-        if (!prefs.llmEnabled) return true
-        return text.contains(' ') || text.length >= 12
-    }
-
-    private fun sameText(source: String, translated: String): Boolean =
-        source.trim().equals(translated.trim(), ignoreCase = true)
-
-    private fun build(item: RawItem, zh: String): RenderItem {
+    private fun build(item: RawItem, zh: String, provisional: Boolean): RenderItem {
         val pad = 2f * density
         val size = TextMeasure.sizeFor(
             translated = zh,
@@ -69,7 +75,7 @@ class Coordinator(
             paddingPx = pad,
             maxSpScale = prefs.fontScale
         )
-        return RenderItem(item, zh, size, isCentered(item, size))
+        return RenderItem(item, zh, size, isCentered(item, size), provisional)
     }
 
     private fun isCentered(item: RawItem, sizePx: Float): Boolean {
@@ -79,6 +85,9 @@ class Coordinator(
         val textWidth = TextMeasure.textWidthPx(item.text, sizePx)
         return textWidth * 1.35f >= item.rect.width()
     }
+
+    private fun sameText(source: String, translated: String): Boolean =
+        source.trim().equals(translated.trim(), ignoreCase = true)
 
     fun close() {
         refiner.stop()
